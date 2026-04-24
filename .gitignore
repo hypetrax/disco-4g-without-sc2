@@ -1,0 +1,7 @@
+node_modules
+build
+tmp
+*.sock
+*.log
+logs/*
+!logs/.gitkeep

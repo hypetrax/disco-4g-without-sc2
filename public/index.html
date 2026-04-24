@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Parrot Disco Dashboard</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.7.1/dist/leaflet.css" />
+    <style>
+        :root {
+            --bg-dark: #0a0a0a;
+            --overlay-bg: rgba(0, 0, 0, 0.65);
+            --accent-blue: #00d2ff;
+            --danger: #dc3545;
+            --warning: #ffc107;
+            --success: #28a745;
+        }
+        body, html { margin: 0; padding: 0; height: 100%; font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background: var(--bg-dark); color: white; overflow: hidden; }
+        
+        /* Containers */
+        .view-container { position: absolute; top: 0; left: 0; width: 100vw; height: 100vh; }
+        #map { height: 100%; width: 100%; }
+        #live-video { width: 100%; height: 100%; object-fit: cover; background: black; }
+        
+        /* Overlays */
+        .overlay { position: absolute; z-index: 1000; pointer-events: auto; }
+        .panel { background: var(--overlay-bg); backdrop-filter: blur(5px); border-radius: 4px; padding: 10px; border: 1px solid rgba(255,255,255,0.1); }
+        
+        /* Top Left - Gauges */
+        #top-left { top: 15px; left: 15px; display: flex; flex-direction: column; gap: 8px; }
+        .meter { display: flex; align-items: baseline; gap: 5px; }
+        .meter .val { font-size: 24px; font-weight: bold; }
+        .meter .unit { font-size: 12px; opacity: 0.7; }
+        .battery-bar { width: 100px; height: 10px; background: #333; border-radius: 5px; overflow: hidden; margin-top: 5px; }
+        #bat-fill { height: 100%; width: 0%; background: var(--success); transition: width 0.3s; }
+
+        /* Top Right - Status */
+        #top-right { top: 15px; right: 15px; text-align: right; display: flex; flex-direction: column; gap: 5px; }
+        .status-item { font-size: 13px; display: flex; justify-content: flex-end; align-items: center; gap: 8px; }
+        .dot { width: 8px; height: 8px; border-radius: 50%; background: #555; }
+        .dot.active { background: var(--success); box-shadow: 0 0 5px var(--success); }
+        .dot.error { background: var(--danger); box-shadow: 0 0 5px var(--danger); }
+
+        /* Bottom Left - Map Preview / Loc */
+        #bottom-left { bottom: 15px; left: 15px; }
+        #minimap-toggle { width: 150px; height: 100px; border: 2px solid rgba(255,255,255,0.2); cursor: pointer; background: url('https://via.placeholder.com/150x100?text=MAP'); background-size: cover; }
+        .coords { font-size: 11px; margin-top: 5px; font-family: monospace; }
+
+        /* Bottom Center - Main Controls */
+        #bottom-center { bottom: 20px; left: 50%; transform: translateX(-50%); display: flex; gap: 15px; }
+        .btn-main { padding: 12px 30px; font-size: 16px; font-weight: bold; text-transform: uppercase; border-radius: 30px; border: none; cursor: pointer; transition: all 0.2s; box-shadow: 0 4px 15px rgba(0,0,0,0.4); }
+        .btn-takeoff { background: var(--success); color: white; }
+        .btn-land { background: var(--warning); color: black; }
+        .btn-emergency { background: var(--danger); color: white; }
+
+        /* Bottom Right - Disco Special */
+        #bottom-right { bottom: 15px; right: 15px; display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+        .btn-small { padding: 8px; font-size: 11px; border-radius: 4px; border: 1px solid rgba(255,255,255,0.2); background: rgba(255,255,255,0.1); color: white; cursor: pointer; }
+        .btn-small:hover { background: rgba(255,255,255,0.2); }
+
+        /* View Toggle */
+        #view-toggle { position: absolute; top: 15px; left: 50%; transform: translateX(-50%); display: flex; background: rgba(0,0,0,0.8); border-radius: 20px; padding: 4px; z-index: 1001; }
+        .toggle-btn { padding: 6px 20px; border-radius: 16px; border: none; background: transparent; color: white; cursor: pointer; font-size: 13px; }
+        .toggle-btn.active { background: var(--accent-blue); color: black; font-weight: bold; }
+
+        /* Token Screen */
+        #token-screen { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: #000; z-index: 9999; display: flex; flex-direction: column; justify-content: center; align-items: center; }
+        #token-screen h1 { color: var(--accent-blue); letter-spacing: 4px; }
+        #token-screen input { padding: 12px; margin: 20px; width: 300px; background: #111; border: 1px solid #333; color: white; text-align: center; font-size: 18px; }
+
+        .hidden { display: none !important; }
+    </style>
+</head>
+<body>
+
+<div id="token-screen">
+    <h1>PARROT DISCO 4G</h1>
+    <input type="password" id="token-input" placeholder="ACCESS TOKEN" value="test">
+    <button class="btn-main btn-takeoff" onclick="initDashboard()">Authorize</button>
+</div>
+
+<div id="view-toggle" class="hidden">
+    <button id="toggle-pilot" class="toggle-btn active" onclick="switchView('pilot')">PILOTING</button>
+    <button id="toggle-map" class="toggle-btn" onclick="switchView('map')">MISSION PLAN</button>
+</div>
+
+<div id="pilot-container" class="view-container">
+    <video id="live-video" autoplay playsinline></video>
+</div>
+
+<div id="map-container" class="view-container hidden">
+    <div id="map"></div>
+</div>
+
+<!-- TOP LEFT: Telemetry -->
+<div id="top-left" class="overlay panel hidden">
+    <div class="meter">
+        <span class="val" id="speed">0</span>
+        <span class="unit">km/h</span>
+    </div>
+    <div class="meter">
+        <span class="val" id="alt">0</span>
+        <span class="unit">m</span>
+    </div>
+    <div class="meter">
+        <span class="val" id="dist">0</span>
+        <span class="unit">m</span>
+    </div>
+    <div style="margin-top:5px">
+        <div style="display:flex; justify-content:space-between; font-size:10px">
+            <span>BATTERY</span>
+            <span id="bat-text">0%</span>
+        </div>
+        <div class="battery-bar"><div id="bat-fill"></div></div>
+    </div>
+    <div class="coords" style="margin-top:10px; border-top: 1px solid #333; padding-top:5px">
+        GPS: <span id="gps-status" style="color:var(--danger)">NO FIX</span> (<span id="sats">0</span> sats)
+    </div>
+</div>
+
+<!-- TOP RIGHT: Status -->
+<div id="top-right" class="overlay panel hidden">
+    <div class="status-item">LATENCY <span id="latency" style="color:var(--success)">- ms</span> <div id="dot-latency" class="dot"></div></div>
+    <div class="status-item">HEALTH <span id="health-status">OK</span> <div id="dot-health" class="dot active"></div></div>
+    <div class="status-item">GAMEPAD <span id="gamepad-status">OFF</span> <div id="dot-gamepad" class="dot"></div></div>
+    <div class="status-item">FLIGHT TIME <span id="flight-time">00:00</span></div>
+</div>
+
+<!-- BOTTOM LEFT: Mini-map / Location -->
+<div id="bottom-left" class="overlay hidden">
+    <div id="minimap-toggle" onclick="switchView('map')"></div>
+    <div class="coords">
+        LAT: <span id="lat">0.000000</span><br>
+        LON: <span id="lon">0.000000</span>
+    </div>
+</div>
+
+<!-- BOTTOM CENTER: Primary Actions -->
+<div id="bottom-center" class="overlay hidden">
+    <div id="joystick-container" class="panel" style="width: 150px; height: 150px; border-radius: 50%; position: relative; margin: 0 auto 15px; border: 2px solid rgba(255,255,255,0.2); touch-action: none;">
+        <div id="joystick-handle" style="width: 50px; height: 50px; background: var(--accent-blue); border-radius: 50%; position: absolute; top: 50px; left: 50px; cursor: pointer; box-shadow: 0 0 15px var(--accent-blue); transition: transform 0.1s;"></div>
+    </div>
+    <div style="display:flex; gap:15px; justify-content:center;">
+        <button class="btn-main btn-takeoff" id="btn-takeoff" onclick="takeOff()">Take Off</button>
+        <button class="btn-main btn-land hidden" id="btn-land" onclick="land()">Land</button>
+        <button class="btn-main btn-emergency" onclick="emergency()">Emergency</button>
+    </div>
+</div>
+
+<!-- BOTTOM RIGHT: Disco Controls -->
+<div id="bottom-right" class="overlay panel hidden">
+    <button class="btn-small" onclick="sendAction('camera-center')">CENTER CAM</button>
+    <button class="btn-small" onclick="sendAction('rth', true)">RTH START</button>
+    <button class="btn-small" onclick="sendAction('circle', 'left')">CIRCLE CCW</button>
+    <button class="btn-small" onclick="sendAction('circle', 'right')">CIRCLE CW</button>
+    <button class="btn-small" style="grid-column: span 2; background: var(--accent-blue); color: black;" onclick="switchView('map')">OPEN FLIGHT PLANNER</button>
+</div>
+
+<!-- Mission Planning Panel (Overlay on Map View) -->
+<div id="flight-plan-panel" class="overlay panel hidden" style="top:140px; right:15px; width:250px;">
+    <h3 style="margin:0 0 10px 0; color:var(--accent-blue); font-size:14px">MISSION PLANNER</h3>
+    <input type="text" id="fp-name" value="mission_1" style="width:100%; background:#111; color:white; border:1px solid #444; padding:5px; margin-bottom:10px;">
+    <div id="wp-list" style="max-height:300px; overflow-y:auto; font-size:11px"></div>
+    <div style="display:flex; gap:5px; margin-top:10px">
+        <button class="btn-small" style="flex:1" onclick="saveFlightPlan()">SAVE</button>
+        <button class="btn-small" style="flex:1" onclick="clearWaypoints()">CLEAR</button>
+    </div>
+    <button class="btn-small" style="width:100%; margin-top:5px; background:var(--success)" onclick="startFlightPlan()">UPLOAD & START</button>
+</div>
+
+<script src="https://unpkg.com/leaflet@1.7.1/dist/leaflet.js"></script>
+<script src="/socket.io/socket.io.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/simple-peer/9.11.0/simplepeer.min.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
